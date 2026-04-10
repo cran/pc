@@ -12,6 +12,49 @@
   target,
   source,
   E = 3:5,
+  k = E,
+  tau = 1,
+  style = 1,
+  lib = NULL,
+  pred = NULL,
+  maximize = c("dark", "positive", "negative"),
+  dist.metric = c("euclidean", "manhattan", "maximum"),
+  zero.tolerance = max(k),
+  relative = TRUE,
+  weighted = TRUE,
+  threads = length(E),
+  higher.parallel = TRUE,
+  h = 0,
+  ...
+)
+
+\S4method{ops}{sf}(
+  data,
+  target,
+  source,
+  E = 3:5,
+  k = E + 1,
+  tau = 1,
+  style = 1,
+  lib = NULL,
+  pred = NULL,
+  maximize = c("dark", "positive", "negative"),
+  dist.metric = c("euclidean", "manhattan", "maximum"),
+  zero.tolerance = max(k),
+  relative = TRUE,
+  weighted = TRUE,
+  threads = length(E),
+  higher.parallel = TRUE,
+  detrend = FALSE,
+  nb = NULL,
+  ...
+)
+
+\S4method{ops}{SpatRaster}(
+  data,
+  target,
+  source,
+  E = 3:5,
   k = E + 1,
   tau = 1,
   style = 1,
@@ -24,46 +67,8 @@
   weighted = TRUE,
   threads = length(E),
   higher.parallel = TRUE,
-  h = 0
-)
-
-\S4method{ops}{sf}(
-  data,
-  target,
-  source,
-  E = 3:5,
-  k = E + 2,
-  tau = 1,
-  style = 1,
-  lib = NULL,
-  pred = NULL,
-  maximize = c("positive", "negative", "dark"),
-  dist.metric = c("euclidean", "manhattan", "maximum"),
-  zero.tolerance = max(k),
-  relative = TRUE,
-  weighted = TRUE,
-  threads = length(E),
-  higher.parallel = TRUE,
-  nb = NULL
-)
-
-\S4method{ops}{SpatRaster}(
-  data,
-  target,
-  source,
-  E = 3:5,
-  k = E + 2,
-  tau = 1,
-  style = 1,
-  lib = NULL,
-  pred = NULL,
-  maximize = c("positive", "negative", "dark"),
-  dist.metric = c("euclidean", "manhattan", "maximum"),
-  zero.tolerance = max(k),
-  relative = TRUE,
-  weighted = TRUE,
-  threads = length(E),
-  higher.parallel = TRUE
+  detrend = FALSE,
+  ...
 )
 }
 \arguments{
@@ -101,6 +106,10 @@
 
 \item{h}{(optional) Prediction horizon.}
 
+\item{...}{Additional arguments to absorb unused inputs in method dispatch.}
+
+\item{detrend}{(optional) Whether to remove the linear trend.}
+
 \item{nb}{(optional) Neighbours list.}
 }
 \value{
@@ -114,7 +123,7 @@ A list.
 Optimal Parameter Search for Pattern Causality
 }
 \examples{
-columbus = sf::read_sf(system.file("case/columbus.gpkg", package="spEDM"))
-pc::ops(columbus, 1, 3, E = 5:10, maximize = "negative", threads = 1)
+crash = sf::read_sf(system.file("case/crash.gpkg", package = "pc"))
+pc::ops(crash, 1, 2, E = 3:10, maximize = "positive", threads = 1)
 
 }

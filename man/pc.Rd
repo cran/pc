@@ -13,13 +13,13 @@
   source,
   libsizes = NULL,
   E = 3,
-  k = E + 1,
+  k = E,
   tau = 1,
   style = 1,
   lib = NULL,
   pred = NULL,
   boot = 99,
-  random = TRUE,
+  replace = FALSE,
   seed = 42L,
   dist.metric = c("euclidean", "manhattan", "maximum"),
   zero.tolerance = max(k),
@@ -28,7 +28,8 @@
   threads = length(libsizes),
   higher.parallel = TRUE,
   verbose = TRUE,
-  h = 0
+  h = 0,
+  ...
 )
 
 \S4method{pc}{sf}(
@@ -37,13 +38,13 @@
   source,
   libsizes = NULL,
   E = 3,
-  k = E + 2,
+  k = E + 1,
   tau = 1,
   style = 1,
   lib = NULL,
   pred = NULL,
   boot = 99,
-  random = TRUE,
+  replace = FALSE,
   seed = 42L,
   dist.metric = c("euclidean", "manhattan", "maximum"),
   zero.tolerance = max(k),
@@ -52,7 +53,9 @@
   threads = length(libsizes),
   higher.parallel = TRUE,
   verbose = TRUE,
-  nb = NULL
+  detrend = FALSE,
+  nb = NULL,
+  ...
 )
 
 \S4method{pc}{SpatRaster}(
@@ -61,13 +64,13 @@
   source,
   libsizes = NULL,
   E = 3,
-  k = E + 2,
+  k = E + 1,
   tau = 1,
   style = 1,
   lib = NULL,
   pred = NULL,
   boot = 99,
-  random = TRUE,
+  replace = FALSE,
   seed = 42L,
   dist.metric = c("euclidean", "manhattan", "maximum"),
   zero.tolerance = max(k),
@@ -75,7 +78,9 @@
   weighted = TRUE,
   threads = length(libsizes),
   higher.parallel = TRUE,
-  verbose = TRUE
+  verbose = TRUE,
+  detrend = FALSE,
+  ...
 )
 }
 \arguments{
@@ -101,7 +106,7 @@
 
 \item{boot}{(optional) Number of bootstraps to perform.}
 
-\item{random}{(optional) Whether to use random sampling.}
+\item{replace}{(optional) Should sampling be with replacement?}
 
 \item{seed}{(optional) Random seed.}
 
@@ -121,25 +126,39 @@
 
 \item{h}{(optional) Prediction horizon.}
 
+\item{...}{Additional arguments to absorb unused inputs in method dispatch.}
+
+\item{detrend}{(optional) Whether to remove the linear trend.}
+
 \item{nb}{(optional) Neighbours list.}
 }
 \value{
-A list (when \code{libsizes} is \code{NULL}) or data.frame.
-If \code{libsizes} is \code{NULL}, a list with two components is returned:
+A list.
 \describe{
-\item{causality}{A data.frame containing per-sample causality results.}
-\item{summary}{A data.frame summarizing overall causality metrics.}
+\item{causality}{
+A data.frame of causality results. When \code{libsizes} is \code{NULL}, it contains
+per-sample causality estimates; otherwise, it contains causality results
+evaluated across different library sizes.
+}
+\item{summary}{
+A data.frame summarizing overall causality metrics. Only returned when
+\code{libsizes} is \code{NULL}.
+}
 }
 }
 \description{
 Pattern Causality
 }
-\note{
-\code{pc} only supports numeric input data.
-}
 \examples{
-columbus = sf::read_sf(system.file("case/columbus.gpkg", package="spEDM"))
-pc::pc(columbus, 1, 3, E = 5, k = 10, threads = 1)
+crash = sf::read_sf(system.file("case/crash.gpkg", package = "pc"))
+p1 = pc::pc(crash, 1, 2, E = 8, k = 8, threads = 1)
+print(p1)
+plot(p1)
+
+# convergence diagnostics
+p2 = pc::pc(crash, 1, 2, libsizes = seq(10,172,40), E = 8, k = 8, threads = 1)
+print(p2)
+plot(p2)
 
 }
 \references{

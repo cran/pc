@@ -415,9 +415,6 @@ namespace symdync
         // 3: Dark
         std::vector<size_t> PatternTypes;
 
-        // Indices of valid observations (after filtering)
-        std::vector<size_t> RealLoop;
-
         // Aggregated statistics (mean over valid entries)
         double TotalPos  = std::numeric_limits<double>::quiet_NaN();
         double TotalNeg  = std::numeric_limits<double>::quiet_NaN();
@@ -425,8 +422,7 @@ namespace symdync
     };
 
     /**
-     * Compute pattern causality from Y to X.
-     *
+     * Compute pattern causality from X to Y.
      *
      * Pipeline:
      *
@@ -444,13 +440,14 @@ namespace symdync
      *
      *  7. Optional strength weighting:
      *
-     *       erf( ||pred_Y|| / (||Y|| + 1e-6) )
+     *       erf( ||pred_Y|| / (||X|| + 1e-6) )
      */
     inline PatternCausalityRes computePatternCausality(
         const std::vector<std::vector<double>>& SMx,
         const std::vector<std::vector<double>>& SMy,
         const std::vector<std::vector<double>>& pred_SMy,
-        bool weighted = true
+        bool weighted = true,
+        bool save_detail = true
     )
     {   
         PatternCausalityRes res;
@@ -459,15 +456,15 @@ namespace symdync
         if (n == 0) return res;
         
         /* ------------------------------------------------------------
-        *  1. Generate symbolic pattern
-        * ------------------------------------------------------------ */
+         *  1. Generate symbolic pattern
+         * ------------------------------------------------------------ */
         std::vector<std::vector<uint8_t>> PX = genPatternSpace(SMx, true);
         std::vector<std::vector<uint8_t>> PY_real = genPatternSpace(SMy, true);
         std::vector<std::vector<uint8_t>> PY_pred = genPatternSpace(pred_SMy, true);
 
         /* ------------------------------------------------------------
-        *  2. Collect and filter pattern space
-        * ------------------------------------------------------------ */
+         *  2. Collect and filter pattern space
+         * ------------------------------------------------------------ */
         std::vector<std::vector<uint8_t>> all_patterns;
         all_patterns.reserve(n * 3);
 
@@ -493,8 +490,8 @@ namespace symdync
         );
 
         /* ------------------------------------------------------------
-        *  3. Symmetric closure
-        * ------------------------------------------------------------ */
+         *  3. Symmetric closure
+         * ------------------------------------------------------------ */
         size_t original_size = all_patterns.size();
 
         for (size_t i = 0; i < original_size; ++i)
@@ -538,12 +535,14 @@ namespace symdync
         /* ------------------------------------------------------------
          *  5. Init result
          * ------------------------------------------------------------ */
-        res.NoCausality.assign(n, 0.0);
-        res.PositiveCausality.assign(n, 0.0);
-        res.NegativeCausality.assign(n, 0.0);
-        res.DarkCausality.assign(n, 0.0);
-        res.PatternTypes.reserve(n);
-        res.RealLoop.reserve(n);
+        if (save_detail)
+        {
+            res.NoCausality.assign(n, 0.0);
+            res.PositiveCausality.assign(n, 0.0);
+            res.NegativeCausality.assign(n, 0.0);
+            res.DarkCausality.assign(n, 0.0);
+            res.PatternTypes.assign(n, 0);
+        }
 
         std::vector<std::vector<double>> heatmap(
             K, std::vector<double>(K, std::numeric_limits<double>::quiet_NaN())
@@ -572,22 +571,19 @@ namespace symdync
                 contains_zero(PY_pred[t]))
                 continue;
 
-            res.RealLoop.push_back(t);
-
             /* --- causality existence --- */
-            if (PY_pred[t] != PY_real[t])
-            {
-                res.NoCausality[t] = 1.0;
-                res.PatternTypes.push_back(0);
-                continue;
-            }
+            bool causality_exit = PY_pred[t] == PY_real[t];
 
             /* --- strength --- */
-            double strength = weighted
-                ? std::erf(
-                    norm_ignore_nan(pred_SMy[t]) /
-                    (norm_ignore_nan(SMy[t]) + 1e-6))
-                : 1.0;
+            double strength = 0.0;
+            if (causality_exit)
+            {
+                strength = weighted
+                    ? std::erf(
+                        norm_ignore_nan(pred_SMy[t]) /
+                        (norm_ignore_nan(SMx[t]) + 1e-6))
+                    : 1.0;
+            }
 
             /* --- index lookup --- */
             auto it_i = std::lower_bound(all_patterns.begin(), all_patterns.end(), PX[t]);
@@ -598,23 +594,6 @@ namespace symdync
 
             size_t i = std::distance(all_patterns.begin(), it_i);
             size_t j = std::distance(all_patterns.begin(), it_j);
-
-            /* --- classification --- */
-            if (i == j)
-            {
-                res.PositiveCausality[t] = strength;
-                res.PatternTypes.push_back(1);
-            }
-            else if (j == opposite_id[i])
-            {
-                res.NegativeCausality[t] = strength;
-                res.PatternTypes.push_back(2);
-            }
-            else
-            {
-                res.DarkCausality[t] = strength;
-                res.PatternTypes.push_back(3);
-            }
 
             /* --- heatmap --- */
             if (std::isnan(heatmap[i][j]))
@@ -627,15 +606,37 @@ namespace symdync
                 heatmap[i][j] += strength;
                 counts[i][j] += 1;
             }
+
+            /* --- classification --- */
+            if (save_detail)
+            {
+                if (!causality_exit)
+                {
+                    res.NoCausality[t] = 1.0;
+                }
+                else if (i == j)
+                {
+                    res.PositiveCausality[t] = strength;
+                    res.PatternTypes[t] = 1;
+                }
+                else if (j == opposite_id[i])
+                {
+                    res.NegativeCausality[t] = strength;
+                    res.PatternTypes[t] = 2;
+                }
+                else
+                {
+                    res.DarkCausality[t] = strength;
+                    res.PatternTypes[t] = 3;
+                }
+            }
         }
 
         /* ------------------------------------------------------------
          * 7. Normalize + aggregate
          * ------------------------------------------------------------ */
-        std::vector<double> diag_vals, anti_vals, other_vals;
-        diag_vals.reserve(K);
-        anti_vals.reserve(K);
-        other_vals.reserve((K - 2) * K);
+        double diag_sum = 0.0, anti_sum = 0.0, other_sum = 0.0;
+        size_t diag_cnt = 0, anti_cnt = 0, other_cnt = 0;
 
         for (size_t i = 0; i < K; ++i)
         {
@@ -646,25 +647,26 @@ namespace symdync
                 double val = heatmap[i][j] / counts[i][j];
 
                 if (i == j)
-                    diag_vals.push_back(val);
+                {
+                    diag_sum += val;
+                    diag_cnt++;
+                }
                 else if (j == opposite_id[i])
-                    anti_vals.push_back(val);
+                {
+                    anti_sum += val;
+                    anti_cnt++;
+                }
                 else
-                    other_vals.push_back(val);
+                {
+                    other_sum += val;
+                    other_cnt++;
+                }
             }
         }
 
-        auto mean = [](const std::vector<double>& v)
-        {
-            if (v.empty()) return std::numeric_limits<double>::quiet_NaN();
-            double s = 0;
-            for (double x : v) s += x;
-            return s / v.size();
-        };
-
-        res.TotalPos  = mean(diag_vals);
-        res.TotalNeg  = mean(anti_vals);
-        res.TotalDark = mean(other_vals);
+        res.TotalPos  = (diag_cnt  > 0) ? diag_sum  / diag_cnt  : 0.0;
+        res.TotalNeg  = (anti_cnt  > 0) ? anti_sum  / anti_cnt  : 0.0;
+        res.TotalDark = (other_cnt > 0) ? other_sum / other_cnt : 0.0;
 
         return res;
     }

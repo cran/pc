@@ -49,7 +49,7 @@ namespace pc
 
 namespace patcaus
 {   
-    /************************************************************************
+    /**********************************************************************************
      *  Compute pattern-based causality from Mx to My using a fixed
      *  library and prediction set.
      *
@@ -64,7 +64,8 @@ namespace patcaus
      *      relative        : Use relative symbolic encoding
      *      weighted        : Use weighted pattern comparison
      *      threads         : Number of threads for parallel execution
-     ************************************************************************/
+     *      save_detail     : Make per-sample causality output
+     **********************************************************************************/
     inline pc::symdync::PatternCausalityRes patcaus(
         const std::vector<std::vector<double>>& Mx,
         const std::vector<std::vector<double>>& My,
@@ -76,7 +77,8 @@ namespace patcaus
         const std::string& dist_metric = "euclidean",
         bool relative = true,
         bool weighted = true,
-        size_t threads = 1)
+        size_t threads = 1,
+        bool save_detail = true)
     {
     // Configure threads (cap at hardware concurrency)
     threads = std::min(static_cast<size_t>(std::thread::hardware_concurrency()), threads);
@@ -94,7 +96,9 @@ namespace patcaus
     {
         size_t pi = pred_indices[p];
         for (size_t li : lib_indices) 
-        {
+        {   
+            if (pi == li) continue;
+
             double dist = pc::distance::distance(Mx[pi], Mx[li], dist_metric, true);
             if (!std::isnan(dist)) 
             {
@@ -129,8 +133,38 @@ namespace patcaus
     // --------------------------------------------------------------------------
     // Step 4: Compute pattern-based causality using symbolic pattern comparison
     // --------------------------------------------------------------------------
-    pc::symdync::PatternCausalityRes res = 
-        pc::symdync::computePatternCausality(SMx, SMy, PredSMy, weighted);
+    pc::symdync::PatternCausalityRes res;
+    bool use_subset = (pred_indices.size() < Mx.size());
+
+    if (!use_subset)
+    {
+        // --- Full data: no slicing needed ---
+        res = pc::symdync::computePatternCausality(
+            SMx, SMy, PredSMy, weighted, save_detail);
+    }
+    else
+    {
+        // --- Slice Mx and My ---
+        std::vector<std::vector<double>> SMx_sub;
+        std::vector<std::vector<double>> SMy_sub;
+        std::vector<std::vector<double>> PredSMy_sub;
+
+        SMx_sub.reserve(pred_indices.size());
+        SMy_sub.reserve(pred_indices.size());
+        PredSMy_sub.reserve(pred_indices.size());
+
+        for (size_t i = 0; i < pred_indices.size(); ++i)
+        {
+            size_t idx = pred_indices[i];
+            SMx_sub.push_back(SMx[idx]);
+            SMy_sub.push_back(SMy[idx]);
+            PredSMy_sub.push_back(PredSMy[idx]);
+        }
+
+        // --- Compute patcaus on subset ---
+        res = pc::symdync::computePatternCausality(
+            SMx_sub, SMy_sub, PredSMy_sub, weighted, save_detail);
+    }
 
     return res;
     }
@@ -190,7 +224,7 @@ namespace patcaus
         const size_t& h = 0,
         const std::string& dist_metric = "euclidean",
         size_t boot = 99,
-        bool random_sample = true,
+        bool replace_sampling = true,
         unsigned long long seed = 42,
         bool relative = true,
         bool weighted = true,
@@ -202,9 +236,6 @@ namespace patcaus
     // Step 1: Configure threads and random generators
     // --------------------------------------------------------------------------
     threads = std::min(static_cast<size_t>(std::thread::hardware_concurrency()), threads);
-
-    // Enforce boot = 1 for deterministic sampling
-    if (!random_sample) boot = 1;
 
     // Prebuild 64-bit RNG pool for reproducibility
     std::vector<std::mt19937_64> rng_pool(boot);
@@ -224,7 +255,9 @@ namespace patcaus
     {
         size_t pi = pred_indices[p];
         for (size_t li : lib_indices) 
-        {
+        {   
+            if (pi == li) continue;
+
             double dist = pc::distance::distance(Mx[pi], Mx[li], dist_metric, true);
             if (!std::isnan(dist)) 
             {
@@ -257,6 +290,9 @@ namespace patcaus
     if (verbose)
         bar = std::make_unique<RcppThread::ProgressBar>(n_libsizes, 1);
 
+    // --- Check if full set is used ---
+    bool use_subset = (pred_indices.size() < Mx.size());
+
     // --------------------------------------------------------------------------
     // Step 5: Iterate over library sizes
     // --------------------------------------------------------------------------
@@ -266,16 +302,30 @@ namespace patcaus
 
         auto process_boot = [&](size_t b) 
         {
-            std::vector<size_t> sampled_lib, sampled_pred;
+            std::vector<size_t> sampled_lib;
+            // std::vector<size_t> sampled_pred;
+            
+            if (boot == 1)
+            {
+                sampled_lib.assign(lib_indices.begin(), lib_indices.begin() + L);
+                // sampled_pred = sampled_lib;
+            }
+            else if (replace_sampling) 
+            {   
+                sampled_lib.resize(L);
+                std::uniform_int_distribution<size_t> dist(0, lib_indices.size() - 1);
 
-            if (random_sample) 
+                for (size_t i = 0; i < L; ++i)
+                {
+                    sampled_lib[i] = lib_indices[dist(rng_pool[b])];
+                }
+                // sampled_pred = sampled_lib;
+            } 
+            else 
             {
                 std::vector<size_t> shuffled_lib = lib_indices;
                 std::shuffle(shuffled_lib.begin(), shuffled_lib.end(), rng_pool[b]);
                 sampled_lib.assign(shuffled_lib.begin(), shuffled_lib.begin() + L);
-                // sampled_pred = sampled_lib;
-            } else {
-                sampled_lib.assign(lib_indices.begin(), lib_indices.begin() + L);
                 // sampled_pred = sampled_lib;
             }
 
@@ -285,8 +335,36 @@ namespace patcaus
             else
                 PredSMy = pc::projection::projection(SMy, Dx, sampled_lib, pred_indices, num_neighbors, zero_tolerance, h, 1);
 
-            pc::symdync::PatternCausalityRes res = pc::symdync::computePatternCausality(
-                SMx, SMy, PredSMy, weighted);
+            pc::symdync::PatternCausalityRes res;
+            if (!use_subset)
+            {
+                // --- Full data: no slicing needed ---
+                res = pc::symdync::computePatternCausality(
+                    SMx, SMy, PredSMy, weighted, false);
+            }
+            else
+            {
+                // --- Slice Mx and My ---
+                std::vector<std::vector<double>> SMx_sub;
+                std::vector<std::vector<double>> SMy_sub;
+                std::vector<std::vector<double>> PredSMy_sub;
+
+                SMx_sub.reserve(pred_indices.size());
+                SMy_sub.reserve(pred_indices.size());
+                PredSMy_sub.reserve(pred_indices.size());
+
+                for (size_t i = 0; i < pred_indices.size(); ++i)
+                {
+                    size_t idx = pred_indices[i];
+                    SMx_sub.push_back(SMx[idx]);
+                    SMy_sub.push_back(SMy[idx]);
+                    PredSMy_sub.push_back(PredSMy[idx]);
+                }
+
+                // --- Compute patcaus on subset ---
+                res = pc::symdync::computePatternCausality(
+                    SMx_sub, SMy_sub, PredSMy_sub, weighted, false);
+            }
 
             all_results[0][li][b] = res.TotalPos;
             all_results[1][li][b] = res.TotalNeg;
